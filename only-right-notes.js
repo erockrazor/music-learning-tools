@@ -90,7 +90,19 @@ function renderProgression() {
   progression.replaceChildren(...progressionRows.map((row, index) => {
     const item = document.createElement("span");
     item.className = "progression-chord";
-    item.textContent = row.label;
+    const match = row.label.match(/^(\()?([b#]*)([IViv]+)(.*?)(\))?$/);
+    if (!match) {
+      item.textContent = row.label;
+    } else {
+      const [, opening, accidental, roman, suffix, closing] = match;
+      item.append(opening || "", accidental, suffix.startsWith("-") ? roman.toLowerCase() : roman);
+      if (suffix) {
+        const superscript = document.createElement("sup");
+        superscript.textContent = suffix;
+        item.append(superscript);
+      }
+      item.append(closing || "");
+    }
     item.dataset.index = index;
     return item;
   }));

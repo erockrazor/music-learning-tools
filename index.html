@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Call & Response</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=2" />
   </head>
   <body>
     <nav class="site-nav" aria-label="Main navigation">
@@ -58,12 +58,14 @@
       <section class="practice-card" aria-label="Only Right Notes controls">
         <div class="field-row">
           <label>Note<select id="only-tonic"></select></label>
-        </div>
-        <div class="tempo-control">
-          <span class="tempo-label">Tempo <output id="tempo-value">100 BPM</output></span>
-          <div class="tempo-controls">
-            <button id="tempo-down" class="tempo-button" type="button" aria-label="Decrease tempo">−</button>
-            <button id="tempo-up" class="tempo-button" type="button" aria-label="Increase tempo">+</button>
+          <div class="tempo-control" aria-label="Tempo">
+            <label for="tempo">Tempo
+              <div class="tempo-controls">
+                <button id="tempo-down" class="tempo-button" type="button" aria-label="Decrease tempo">−</button>
+                <output id="tempo-value">100 BPM</output>
+                <button id="tempo-up" class="tempo-button" type="button" aria-label="Increase tempo">+</button>
+              </div>
+            </label>
           </div>
         </div>
         <div class="progression-heading">
