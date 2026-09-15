@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Call & Response</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <nav class="site-nav" aria-label="Main navigation">
+      <a class="active" href="#call-and-response" data-view="call-and-response">Call &amp; Response</a>
+      <a href="#only-right-notes" data-view="only-right-notes">Only Right Notes</a>
+    </nav>
+    <main class="app-shell" id="call-and-response-view" data-view-panel="call-and-response">
+      <section class="hero">
+        <p class="eyebrow">Ear training</p>
+        <h1>Call <span>&amp;</span> Response</h1>
+        <p class="intro">Listen to the melody, then sing or play it back. Each correct response adds one more note.</p>
+      </section>
+
+      <section class="practice-card" aria-label="Practice controls">
+        <div class="field-row">
+          <label>
+            Note
+            <select id="tonic"></select>
+          </label>
+          <label>
+            Key / mode
+            <select id="mode"></select>
+          </label>
+        </div>
+
+        <div id="sequence-panel" class="sequence-panel" hidden>
+          <div class="sequence-heading"><span>Call</span><span id="level">Level 1</span></div>
+          <div id="sequence" class="sequence" aria-live="polite"></div>
+          <div class="sequence-heading response-heading"><span>Your response</span></div>
+          <div id="live-response" class="sequence" aria-live="polite"></div>
+          <button id="replay-call" class="replay-button" type="button" hidden aria-label="Replay call">↻</button>
+        </div>
+        <div class="actions">
+          <button id="play-call" class="primary">Start game</button>
+          <button id="start-over" class="secondary" hidden>Start over</button>
+        </div>
+        <div class="scoreboard" aria-live="polite">
+          <span>Score <strong id="score">0</strong></span>
+          <span>High score <strong id="high-score">0</strong></span>
+        </div>
+        <p id="status" class="status" role="status">Choose a key, then play the call.</p>
+      </section>
+
+    </main>
+    <main class="app-shell" id="only-right-notes-view" data-view-panel="only-right-notes" hidden>
+      <section class="hero">
+        <p class="eyebrow">Chord accuracy</p>
+        <h1>Only <span>Right</span> Notes</h1>
+        <p class="intro">Play notes that belong to each chord as the progression moves forward.</p>
+      </section>
+      <section class="practice-card" aria-label="Only Right Notes controls">
+        <div class="field-row">
+          <label>Note<select id="only-tonic"></select></label>
+        </div>
+        <div class="tempo-control">
+          <span class="tempo-label">Tempo <output id="tempo-value">100 BPM</output></span>
+          <div class="tempo-controls">
+            <button id="tempo-down" class="tempo-button" type="button" aria-label="Decrease tempo">−</button>
+            <button id="tempo-up" class="tempo-button" type="button" aria-label="Increase tempo">+</button>
+          </div>
+        </div>
+        <div class="progression-heading">
+          <span id="progression-title">Choose a progression</span>
+          <span id="current-chord" aria-live="polite">-</span>
+        </div>
+        <div id="progression" class="progression" aria-live="polite"></div>
+        <div class="actions progression-actions">
+          <button id="start" class="primary">Start progression</button>
+          <button id="stop" class="secondary" hidden>Stop</button>
+          <button id="mute-chords" class="secondary" type="button" aria-pressed="false">Mute chords</button>
+        </div>
+        <div class="scoreboard" aria-live="polite">
+          <span>Right <strong id="right-score">0</strong></span>
+          <span>Wrong <strong id="wrong-score">0</strong></span>
+          <span>Accuracy <strong id="accuracy">0%</strong></span>
+        </div>
+        <p id="only-status" class="status" role="status">Choose a progression, then start.</p>
+      </section>
+    </main>
+    <details class="settings">
+      <summary>Audio response settings</summary>
+      <div class="settings-grid">
+        <label>Volume threshold<output id="threshold-value">-45 dB</output><input id="threshold" type="range" min="-120" max="0" value="-45" />
+          <div class="meter" aria-label="Input level"><div class="meter-labels" aria-hidden="true"><span>-∞ dB</span><span id="peak-value">-∞ dB</span></div><div class="meter-track"><div id="level-meter" class="meter-fill"></div></div></div>
+        </label>
+        <label>Minimum note length<output id="duration-value">140 ms</output><input id="duration" type="range" min="60" max="500" step="10" value="140" /></label>
+      </div>
+      <div class="note-indicator" aria-live="polite"><span id="note-dot" class="note-dot" aria-hidden="true"></span><span id="triggered-note">No note detected yet</span></div>
+    </details>
+
+    <script src="https://unpkg.com/tone@14.7.77/build/Tone.js"></script>
+    <script src="./app.js"></script>
+    <script src="./only-right-notes.js"></script>
+    <script>
+      const viewLinks = document.querySelectorAll("[data-view]");
+      const viewPanels = document.querySelectorAll("[data-view-panel]");
+      function showView(view) {
+        const selected = view === "only-right-notes" ? view : "call-and-response";
+        viewPanels.forEach((panel) => { panel.hidden = panel.dataset.viewPanel !== selected; });
+        viewLinks.forEach((link) => {
+          const active = link.dataset.view === selected;
+          link.classList.toggle("active", active);
+          link.setAttribute("aria-current", active ? "page" : "false");
+        });
+      }
+      function syncView() { showView(location.hash.slice(1)); }
+      viewLinks.forEach((link) => link.addEventListener("click", () => showView(link.dataset.view)));
+      window.addEventListener("hashchange", syncView);
+      syncView();
+    </script>
+  </body>
+</html>
