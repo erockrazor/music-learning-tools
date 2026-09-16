@@ -43,6 +43,8 @@ mode.value = "Major";
 let call = [];
 let synth;
 let mic;
+let inputHighPass;
+let inputLowPass;
 let analyser;
 let responseTimer;
 let responseNotes = [];
@@ -255,8 +257,12 @@ async function startMonitoring() {
   if (mic) return;
   mic = new Tone.UserMedia();
   await mic.open();
+  inputHighPass = new Tone.Filter(60, "highpass");
+  inputLowPass = new Tone.Filter(1200, "lowpass");
   analyser = new Tone.Analyser("waveform", 2048);
-  mic.connect(analyser);
+  mic.connect(inputHighPass);
+  inputHighPass.connect(inputLowPass);
+  inputLowPass.connect(analyser);
   responseTimer = setInterval(() => {
     const pitch = detectPitch(analyser.getValue(), Tone.getContext().sampleRate);
     const now = performance.now();
@@ -316,7 +322,7 @@ function finishResponse() {
     practiceCard.classList.remove("level-complete");
     void practiceCard.offsetWidth;
     practiceCard.classList.add("level-complete");
-    roundTimer = setTimeout(playSequence, 2000);
+    roundTimer = setTimeout(playSequence, 50);
   } else {
     gameActive = false;
     sequencePanel.hidden = false;

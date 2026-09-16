@@ -38,6 +38,8 @@ tempoValue.textContent = `${initialTempo} BPM`;
 let synth;
 let metronome;
 let mic;
+let inputHighPass;
+let inputLowPass;
 let analyser;
 let monitorTimer;
 let progressionRows = [];
@@ -155,8 +157,12 @@ async function startMonitoring() {
   if (mic) return;
   mic = new Tone.UserMedia();
   await mic.open();
+  inputHighPass = new Tone.Filter(60, "highpass");
+  inputLowPass = new Tone.Filter(1200, "lowpass");
   analyser = new Tone.Analyser("waveform", 2048);
-  mic.connect(analyser);
+  mic.connect(inputHighPass);
+  inputHighPass.connect(inputLowPass);
+  inputLowPass.connect(analyser);
   monitorTimer = setInterval(() => {
     const buffer = analyser.getValue();
     let mean = 0;
