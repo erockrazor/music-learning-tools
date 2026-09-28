@@ -95,6 +95,19 @@ label {
 .field-row {
   margin-bottom: 1rem;
 }
+.call-tempo-control {
+  margin-bottom: 1rem;
+}
+.call-tempo-control output {
+  color: #e9d8ff;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+.setting-hint {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 400;
+}
 .tempo-control {
   align-items: end;
   display: flex;
@@ -151,6 +164,14 @@ select {
   font-size: 0.78rem;
   font-weight: 700;
 }
+.response-heading { align-items: center; }
+.response-reset {
+  background: transparent;
+  color: var(--muted);
+  font-size: .7rem;
+  padding: .3rem .5rem;
+}
+.response-reset:hover { color: var(--accent); }
 .sequence {
   display: flex;
   gap: 0.45rem;
@@ -258,10 +279,28 @@ select {
   border-radius: 0.65rem;
   color: #e8d9ff;
   display: flex;
+  flex-direction: column;
   font-weight: 700;
+  gap: 0.08rem;
   justify-content: center;
-  min-width: 2.8rem;
-  padding: 0.75rem 0.5rem;
+  min-height: 4.5rem;
+  min-width: 3.6rem;
+  padding: 0.45rem 0.5rem;
+  text-align: center;
+}
+.note-chip-name {
+  font-size: 1rem;
+  line-height: 1.2;
+}
+.note-chip-solfege {
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+.note-chip-degree {
+  color: var(--panel);
+  font-size: 1rem;
+  line-height: 1.2;
 }
 .note-chip.pulse {
   animation: block-pulse 0.45s ease-out;

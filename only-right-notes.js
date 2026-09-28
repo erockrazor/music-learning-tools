@@ -16,7 +16,6 @@ const tempoValue = document.querySelector("#tempo-value");
 const tempoDown = document.querySelector("#tempo-down");
 const tempoUp = document.querySelector("#tempo-up");
 const thresholdValue = document.querySelector("#threshold-value");
-const durationValue = document.querySelector("#duration-value");
 const levelMeter = document.querySelector("#level-meter");
 const peakValue = document.querySelector("#peak-value");
 const noteDot = document.querySelector("#note-dot");
@@ -25,13 +24,10 @@ const muteChords = document.querySelector("#mute-chords");
 
 NOTE_NAMES.forEach((note, index) => tonic.add(new Option(note, index)));
 const savedThreshold = localStorage.getItem("call-response-threshold");
-const savedDuration = localStorage.getItem("call-response-duration");
 const savedTempo = localStorage.getItem("only-right-notes-tempo");
 const initialTempo = savedTempo === null ? 100 : Math.max(40, Math.min(220, Number(savedTempo) || 100));
 const savedMute = localStorage.getItem("only-right-notes-muted") === "true";
 if (savedThreshold !== null) threshold.value = savedThreshold;
-if (savedDuration !== null) duration.value = savedDuration;
-durationValue.textContent = `${duration.value} ms`;
 tempoValue.dataset.bpm = initialTempo;
 tempoValue.textContent = `${initialTempo} BPM`;
 
@@ -283,7 +279,6 @@ muteChords.addEventListener("click", () => {
   updateMuteButton();
 });
 threshold.addEventListener("input", () => { thresholdValue.textContent = `${threshold.value} dB`; localStorage.setItem("call-response-threshold", threshold.value); });
-duration.addEventListener("input", () => { durationValue.textContent = `${duration.value} ms`; localStorage.setItem("call-response-duration", duration.value); });
 function updateTempo(delta) {
   const next = Math.max(40, Math.min(220, Number(tempoValue.dataset.bpm || tempoValue.textContent.replace(" BPM", "")) + delta));
   tempoValue.dataset.bpm = next;

@@ -26,11 +26,13 @@ const playCall = document.querySelector("#play-call");
 const startOver = document.querySelector("#start-over");
 const scoreDisplay = document.querySelector("#score");
 const highScoreDisplay = document.querySelector("#high-score");
-const replayCall = document.querySelector("#replay-call");
+const callTempo = document.querySelector("#call-tempo");
+const callTempoValue = document.querySelector("#call-tempo-value");
 const threshold = document.querySelector("#threshold");
 const duration = document.querySelector("#duration");
 const thresholdValue = document.querySelector("#threshold-value");
 const durationValue = document.querySelector("#duration-value");
+const durationRecommendation = document.querySelector("#duration-recommendation");
 const levelMeter = document.querySelector("#level-meter");
 const peakValue = document.querySelector("#peak-value");
 const noteDot = document.querySelector("#note-dot");
@@ -41,6 +43,9 @@ Object.keys(MODES).forEach((name) => mode.add(new Option(name, name)));
 mode.value = "Major";
 
 let call = [];
+let currentLevel = 1;
+let correctStreak = 0;
+let incorrectStreak = 0;
 let synth;
 let mic;
 let inputHighPass;
@@ -53,18 +58,24 @@ let lastPitch = null;
 let candidatePitch = null;
 let candidateStartedAt = 0;
 let responseActive = false;
-let gameActive = false;
+let callPlaybackComplete = false;
 let roundTimer;
-let replayingCall = false;
+let listenTimer;
 let score = 0;
 const levelHistory = [];
 const callDurations = [];
 const savedThreshold = localStorage.getItem("call-response-threshold");
 const savedDuration = localStorage.getItem("call-response-duration");
 const savedHighScore = Number(localStorage.getItem("call-response-high-score") || 0);
+const savedCallTempo = Number(localStorage.getItem("call-response-tempo") || 100);
 
 if (savedThreshold !== null) threshold.value = savedThreshold;
-if (savedDuration !== null) duration.value = savedDuration;
+if (savedDuration !== null && Number.isFinite(Number(savedDuration))) {
+  duration.value = String(Math.max(Number(duration.min), Math.min(Number(duration.max), Number(savedDuration))));
+}
+callTempo.value = String(Math.max(40, Math.min(160, savedCallTempo)));
+callTempoValue.textContent = `${callTempo.value} BPM`;
+updateDurationRecommendation();
 durationValue.textContent = `${duration.value} ms`;
 highScoreDisplay.textContent = savedHighScore;
 
@@ -76,27 +87,109 @@ function noteName(degree) {
   return NOTE_NAMES[getScale()[degree % 7]];
 }
 
+function getDegreeLabel(pitchClass) {
+  const interval = (pitchClass - Number(tonic.value) + 12) % 12;
+  const naturalIntervals = [0, 2, 4, 5, 7, 9, 11];
+  const naturalSolfege = ["Do", "Re", "Mi", "Fa", "Sol", "La", "Ti"];
+  const sharpSolfege = ["Di", "Ri", "Fi", "Fi", "Si", "Li", "Di"];
+  const flatSolfege = ["Do", "Ra", "Me", "Se", "Le", "Te", "Ta"];
+  const modeIntervals = MODES[mode.value];
+  let degree = modeIntervals.indexOf(interval);
+  let alteration = 0;
+
+  if (degree >= 0) {
+    alteration = interval - naturalIntervals[degree];
+  } else {
+    let closestDistance = Infinity;
+    naturalIntervals.forEach((naturalInterval, index) => {
+      const difference = ((interval - naturalInterval + 18) % 12) - 6;
+      if (Math.abs(difference) < closestDistance) {
+        degree = index;
+        alteration = difference;
+        closestDistance = Math.abs(difference);
+      }
+    });
+  }
+
+  const accidental = alteration < 0 ? "♭" : alteration > 0 ? "♯" : "";
+  const syllables = alteration < 0 ? flatSolfege : alteration > 0 ? sharpSolfege : naturalSolfege;
+  return { degree: `${accidental}${degree + 1}`, solfege: syllables[degree] };
+}
+
+function createCall(levelNumber) {
+  const call = [Math.floor(Math.random() * 7)];
+  const maxInterval = Math.min(Math.floor(levelNumber / 2), 6);
+  while (call.length < levelNumber) {
+    const previousDegree = call[call.length - 1];
+    const candidates = [];
+    for (let interval = 0; interval <= maxInterval; interval += 1) {
+      for (const direction of interval === 0 ? [0] : [-1, 1]) {
+        const degree = previousDegree + interval * direction;
+        if (degree >= 0 && degree < 7) {
+          const weight = interval === 0 || interval === 4 ? 0.2 : 1 / (interval + 1);
+          candidates.push({ degree, weight });
+        }
+      }
+    }
+    const totalWeight = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
+    let choice = Math.random() * totalWeight;
+    const selected = candidates.find((candidate) => (choice -= candidate.weight) < 0);
+    call.push(selected.degree);
+  }
+  return call;
+}
+
+function updateDurationRecommendation() {
+  const milliseconds = Math.round((60 / Number(callTempo.value) / 3) * 1000);
+  durationRecommendation.textContent = `Less Than ${milliseconds} ms recommended`;
+}
+
 function renderSequence() {
   sequence.replaceChildren();
   liveResponse.replaceChildren();
-  level.textContent = `Level ${call.length}`;
+  level.textContent = `Level ${currentLevel}`;
 }
 
 function renderLiveBlocks(callCount, responseCount, showNames = false, pulseType = "") {
   sequence.replaceChildren(...call.slice(0, callCount).map((degree) => {
     const chip = document.createElement("span");
     chip.className = `note-chip${pulseType === "call" && callCount > 0 ? " pulse" : ""}`;
-    chip.textContent = showNames ? noteName(degree) : "";
-    chip.setAttribute("aria-label", showNames ? noteName(degree) : "Call note");
+    if (showNames) {
+      const pitchClass = getScale()[degree % 7];
+      const degreeInfo = getDegreeLabel(pitchClass);
+      appendNoteLabels(chip, pitchClass);
+      chip.setAttribute("aria-label", `${NOTE_NAMES[pitchClass]}, ${degreeInfo.solfege}, scale degree ${degreeInfo.degree}`);
+    } else {
+      chip.setAttribute("aria-label", "Call note");
+    }
     return chip;
   }));
-  liveResponse.replaceChildren(...responseNotes.slice(0, responseCount).map((note) => {
+  const visibleResponseNotes = responseNotes.slice(0, responseCount);
+  if (responseActive && lastPitch !== null && visibleResponseNotes.length < responseCount) {
+    visibleResponseNotes.push(lastPitch);
+  }
+  liveResponse.replaceChildren(...visibleResponseNotes.map((note) => {
     const chip = document.createElement("span");
     chip.className = `note-chip response-chip${pulseType === "response" && responseCount > 0 ? " pulse" : ""}`;
-    chip.textContent = showNames ? NOTE_NAMES[note] : "";
-    chip.setAttribute("aria-label", showNames ? NOTE_NAMES[note] : "Response note");
+    appendNoteLabels(chip, note);
+    const degreeInfo = getDegreeLabel(note);
+    chip.setAttribute("aria-label", `${NOTE_NAMES[note]}, ${degreeInfo.solfege}, scale degree ${degreeInfo.degree}`);
     return chip;
   }));
+}
+
+function appendNoteLabels(chip, pitchClass) {
+  const degreeInfo = getDegreeLabel(pitchClass);
+  const name = document.createElement("span");
+  name.className = "note-chip-name";
+  name.textContent = NOTE_NAMES[pitchClass];
+  const solfege = document.createElement("span");
+  solfege.className = "note-chip-solfege";
+  solfege.textContent = degreeInfo.solfege;
+  const degree = document.createElement("span");
+  degree.className = "note-chip-degree";
+  degree.textContent = degreeInfo.degree;
+  chip.append(name, solfege, degree);
 }
 
 function pulseBlock(container) {
@@ -161,53 +254,72 @@ function addScorePoint() {
 }
 
 function recordResponseNote(note) {
+  if (responseNotes.length >= call.length) return;
   responseNotes.push(note);
   addScorePoint();
+  if (responseNotes.length === call.length) {
+    responseActive = false;
+    if (callPlaybackComplete) finishResponse();
+  }
 }
 
 function finishPlayback() {
+  callPlaybackComplete = true;
+  sequencePanel.hidden = false;
+  renderLiveBlocks(call.length, responseNotes.length);
+  if (responseNotes.length >= call.length) {
+    responseActive = false;
+    finishResponse();
+    return;
+  }
   responseActive = true;
-  replayingCall = false;
-  noteStartedAt = 0;
-  lastPitch = null;
-  candidatePitch = null;
-  candidateStartedAt = 0;
-  replayCall.textContent = "↻";
-  replayCall.setAttribute("aria-label", "Replay call");
-  replayCall.classList.remove("playing");
-  replayCall.hidden = false;
   setStatus("Your turn. Play the full series of notes.");
 }
 
-async function playSequence({ replay = false, includeIntro = false } = {}) {
+async function playSequence({ includeIntro = false } = {}) {
   await ensureAudio();
+  clearTimeout(roundTimer);
+  clearTimeout(listenTimer);
   playCall.disabled = true;
-  if (!replay) startOver.hidden = true;
-  replayingCall = replay;
   sequencePanel.hidden = true;
-  replayCall.hidden = true;
-  if (!replay) {
-    responseNotes = [];
-    renderLiveBlocks(0, 0);
-  }
+  responseNotes = [];
+  renderLiveBlocks(0, 0);
   responseActive = false;
+  callPlaybackComplete = false;
   setStatus("Listen closely...");
+  const bpm = Number(callTempo.value);
+  const beatSeconds = 60 / bpm;
+  Tone.Transport.bpm.value = bpm;
   const now = Tone.now() + 0.08;
   if (includeIntro) {
-    [0, 3, 4].forEach((degree, index) => playChord(degree, now + index * 0.75));
+    [0, 3, 4].forEach((degree, index) => playChord(degree, now + index * beatSeconds));
   }
-  let time = now + (includeIntro ? 2.5 : 0.08);
+  let time = now + (includeIntro ? beatSeconds * 3 : 0.08);
+  const callStartTime = time;
+  const durationBeats = { "2n": 2, "4n": 1, "8n": 0.5, "8t": 1 / 3 };
   call.forEach((degree, index) => {
     const noteDuration = callDurations[index] || ["2n", "4n", "8n", "8t"][Math.floor(Math.random() * 4)];
-    const seconds = Tone.Time(noteDuration).toSeconds() + 0.1;
+    const seconds = beatSeconds * durationBeats[noteDuration];
     callDurations[index] = noteDuration;
     playNote(degree, time, seconds);
     Tone.Draw.schedule(() => {
       renderLiveBlocks(index + 1, 0);
       pulseBlock(sequence);
     }, time);
-    time += seconds + 0.1;
+    time += seconds + beatSeconds * 0.08;
   });
+  const callDuration = time - callStartTime;
+  listenTimer = setTimeout(() => {
+    if (callPlaybackComplete) return;
+    responseActive = responseNotes.length < call.length;
+    lastPitch = null;
+    candidatePitch = null;
+    candidateStartedAt = 0;
+    noteStartedAt = 0;
+    sequencePanel.hidden = false;
+    renderLiveBlocks(call.length, responseNotes.length);
+    setStatus("The call is still playing. You can begin your response now.");
+  }, Math.max(0, (callStartTime - now + callDuration / 2) * 1000));
   roundTimer = setTimeout(finishPlayback, (time - now) * 1000);
 }
 
@@ -273,7 +385,6 @@ async function startMonitoring() {
           recordResponseNote(lastPitch);
           renderLiveBlocks(call.length, responseNotes.length);
           pulseBlock(liveResponse);
-          if (responseNotes.length >= call.length) finishResponse();
         }
         lastPitch = null;
       }
@@ -287,15 +398,14 @@ async function startMonitoring() {
     }
     if (now - candidateStartedAt < Number(duration.value)) return;
     if (pitch === lastPitch) {
-      if (responseActive && responseNotes.length === call.length - 1 && now - noteStartedAt >= Number(duration.value)) {
+      if (responseActive && responseNotes.length < call.length && responseNotes.length === call.length - 1 && now - noteStartedAt >= Number(duration.value)) {
         recordResponseNote(lastPitch);
         renderLiveBlocks(call.length, responseNotes.length);
         pulseBlock(liveResponse);
-        finishResponse();
       }
       return;
     }
-    if (lastPitch !== null && responseActive) {
+    if (lastPitch !== null && responseActive && responseNotes.length < call.length) {
       recordResponseNote(lastPitch);
       renderLiveBlocks(call.length, responseNotes.length);
     }
@@ -314,56 +424,85 @@ function finishResponse() {
   const expected = call.map((degree) => getScale()[degree % 7]);
   const response = responseNotes.slice(0, call.length);
   const correct = response.length === expected.length && response.every((note, index) => note === expected[index]);
+  const previousLevel = currentLevel;
+  let levelAdvanced = false;
+  let levelDropped = false;
   if (correct) {
-    call.push(Math.floor(Math.random() * 7));
-    renderSequence();
-    setStatus("Correct! Listen for the next call.", "success");
-    clearTimeout(roundTimer);
-    practiceCard.classList.remove("level-complete");
-    void practiceCard.offsetWidth;
-    practiceCard.classList.add("level-complete");
-    roundTimer = setTimeout(playSequence, 50);
+    correctStreak += 1;
+    incorrectStreak = 0;
+    if (correctStreak === 3) {
+      currentLevel += 1;
+      correctStreak = 0;
+      levelAdvanced = true;
+      practiceCard.classList.remove("level-complete");
+      void practiceCard.offsetWidth;
+      practiceCard.classList.add("level-complete");
+    }
   } else {
-    gameActive = false;
-    sequencePanel.hidden = false;
-    renderLiveBlocks(call.length, response.length, true);
-    const savedHighScore = Number(localStorage.getItem("call-response-high-score") || 0);
-    const newHighScore = Math.max(savedHighScore, score);
-    localStorage.setItem("call-response-high-score", newHighScore);
-    highScoreDisplay.textContent = newHighScore;
-    startOver.hidden = false;
-    setStatus(`Not quite. Final score: ${score}. Start over to play again.`, "error");
+    incorrectStreak += 1;
+    correctStreak = 0;
+    if (incorrectStreak === 3) {
+      currentLevel = Math.max(1, currentLevel - 1);
+      incorrectStreak = 0;
+      levelDropped = true;
+    }
   }
+  renderLiveBlocks(call.length, response.length, true);
+  level.textContent = `Level ${currentLevel}`;
+  const savedHighScore = Number(localStorage.getItem("call-response-high-score") || 0);
+  const newHighScore = Math.max(savedHighScore, score);
+  localStorage.setItem("call-response-high-score", newHighScore);
+  highScoreDisplay.textContent = newHighScore;
+  const outcome = correct ? "Correct response" : "Incorrect response";
+  const levelChange = levelAdvanced
+    ? ` Three correct in a row! Advancing to level ${currentLevel}.`
+    : levelDropped && currentLevel < previousLevel
+      ? ` Three incorrect in a row. Dropping to level ${currentLevel}.`
+      : levelDropped
+        ? " Three incorrect in a row. Staying at minimum level 1."
+        : "";
+  setStatus(`${outcome}.${levelChange}`, correct ? "success" : "");
+  call = createCall(currentLevel);
+  roundTimer = setTimeout(() => playSequence(), 900);
 }
 
 function resetGame() {
   clearTimeout(roundTimer);
-  gameActive = true;
+  clearTimeout(listenTimer);
+  playCall.hidden = true;
+  startOver.hidden = false;
   responseActive = false;
+  currentLevel = 1;
+  correctStreak = 0;
+  incorrectStreak = 0;
+  lastPitch = null;
+  candidatePitch = null;
+  candidateStartedAt = 0;
   score = 0;
   scoreDisplay.textContent = score;
   sequencePanel.hidden = true;
   callDurations.length = 0;
-  call = [Math.floor(Math.random() * 7)];
-  playCall.hidden = true;
+  call = createCall(currentLevel);
   renderSequence();
   playSequence({ includeIntro: true });
 }
 
 playCall.addEventListener("click", resetGame);
-replayCall.addEventListener("click", () => {
-  if (!replayingCall) playSequence({ replay: true });
-});
 startOver.addEventListener("click", resetGame);
 tonic.addEventListener("change", () => {});
 mode.addEventListener("change", () => {});
-threshold.addEventListener("input", () => {
-  updateThresholdLabel();
-  localStorage.setItem("call-response-threshold", threshold.value);
+callTempo.addEventListener("input", () => {
+  callTempoValue.textContent = `${callTempo.value} BPM`;
+  localStorage.setItem("call-response-tempo", callTempo.value);
+  updateDurationRecommendation();
 });
 duration.addEventListener("input", () => {
   durationValue.textContent = `${duration.value} ms`;
   localStorage.setItem("call-response-duration", duration.value);
+});
+threshold.addEventListener("input", () => {
+  updateThresholdLabel();
+  localStorage.setItem("call-response-threshold", threshold.value);
 });
 updateThresholdLabel();
 startMonitoring().catch((error) => setStatus(`Microphone monitoring unavailable: ${error.message}`, "error"));
