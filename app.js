@@ -57,6 +57,7 @@ let noteStartedAt = 0;
 let lastPitch = null;
 let candidatePitch = null;
 let candidateStartedAt = 0;
+let candidateFrameCount = 0;
 let responseActive = false;
 let callPlaybackComplete = false;
 let roundTimer;
@@ -265,6 +266,8 @@ function recordResponseNote(note) {
 
 function finishPlayback() {
   callPlaybackComplete = true;
+  candidatePitch = null;
+  candidateFrameCount = 0;
   sequencePanel.hidden = false;
   renderLiveBlocks(call.length, responseNotes.length);
   if (responseNotes.length >= call.length) {
@@ -286,6 +289,10 @@ async function playSequence({ includeIntro = false } = {}) {
   renderLiveBlocks(0, 0);
   responseActive = false;
   callPlaybackComplete = false;
+  lastPitch = null;
+  candidatePitch = null;
+  candidateStartedAt = 0;
+  candidateFrameCount = 0;
   setStatus("Listen closely...");
   const bpm = Number(callTempo.value);
   const beatSeconds = 60 / bpm;
@@ -315,6 +322,7 @@ async function playSequence({ includeIntro = false } = {}) {
     lastPitch = null;
     candidatePitch = null;
     candidateStartedAt = 0;
+    candidateFrameCount = 0;
     noteStartedAt = 0;
     sequencePanel.hidden = false;
     renderLiveBlocks(call.length, responseNotes.length);
@@ -343,26 +351,58 @@ function detectPitch(buffer, sampleRate) {
   levelMeter.style.transform = `scaleX(${Math.max(0, Math.min(1, (levelDb + 60) / 60))})`;
   if (rms < thresholdAmplitude()) return null;
 
-  let bestOffset = -1;
-  let bestCorrelation = 0;
-  const minOffset = Math.floor(sampleRate / 1000);
-  const maxOffset = Math.min(Math.floor(sampleRate / 70), Math.floor(buffer.length / 2));
-  for (let offset = minOffset; offset <= maxOffset; offset += 1) {
-    let correlation = 0;
-    let leftEnergy = 0;
-    let rightEnergy = 0;
-    for (let index = 0; index < buffer.length - offset; index += 1) {
-      const left = buffer[index] - mean;
-      const right = buffer[index + offset] - mean;
-      correlation += left * right;
-      leftEnergy += left * left;
-      rightEnergy += right * right;
-    }
-    const denominator = Math.sqrt(leftEnergy * rightEnergy);
-    correlation = denominator > 0 ? correlation / denominator : 0;
-    if (correlation > bestCorrelation) { bestCorrelation = correlation; bestOffset = offset; }
+  // Average pairs to decimate the longer capture window while retaining guitar fundamentals.
+  const decimation = 2;
+  const samples = new Float32Array(Math.floor(buffer.length / decimation));
+  let sampleMean = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const start = index * decimation;
+    samples[index] = (buffer[start] + buffer[start + 1]) / decimation;
+    sampleMean += samples[index];
   }
-  return bestOffset > 0 && bestCorrelation > 0.35 ? frequencyToMidi(sampleRate / bestOffset) % 12 : null;
+  sampleMean /= samples.length;
+  for (let index = 0; index < samples.length; index += 1) samples[index] -= sampleMean;
+
+  const analysisRate = sampleRate / decimation;
+  const minLag = Math.max(2, Math.floor(analysisRate / 1000));
+  const maxLag = Math.min(Math.floor(analysisRate / 70), Math.floor(samples.length / 2));
+  const normalizedDifference = new Float32Array(maxLag + 1);
+  let cumulativeDifference = 0;
+
+  for (let lag = 1; lag <= maxLag; lag += 1) {
+    let sum = 0;
+    for (let index = 0; index < samples.length - lag; index += 1) {
+      const delta = samples[index] - samples[index + lag];
+      sum += delta * delta;
+    }
+    cumulativeDifference += sum;
+    normalizedDifference[lag] = cumulativeDifference > 0 ? (sum * lag) / cumulativeDifference : 1;
+  }
+
+  let bestLag = -1;
+  let bestDifference = Infinity;
+  for (let lag = minLag; lag <= maxLag; lag += 1) {
+    if (normalizedDifference[lag] <= 0.2) {
+      while (lag < maxLag && normalizedDifference[lag + 1] < normalizedDifference[lag]) lag += 1;
+      bestLag = lag;
+      bestDifference = normalizedDifference[lag];
+      break;
+    }
+    if (normalizedDifference[lag] < bestDifference) {
+      bestLag = lag;
+      bestDifference = normalizedDifference[lag];
+    }
+  }
+
+  const confidence = 1 - bestDifference;
+  if (bestLag < minLag || confidence < 0.8) return null;
+  const before = normalizedDifference[bestLag - 1] ?? normalizedDifference[bestLag];
+  const center = normalizedDifference[bestLag];
+  const after = normalizedDifference[bestLag + 1] ?? center;
+  const curvature = before - (2 * center) + after;
+  const adjustment = curvature ? 0.5 * (before - after) / curvature : 0;
+  const refinedLag = bestLag + Math.max(-0.5, Math.min(0.5, adjustment));
+  return { pitch: frequencyToMidi(analysisRate / refinedLag) % 12, confidence };
 }
 
 async function startMonitoring() {
@@ -371,15 +411,16 @@ async function startMonitoring() {
   await mic.open();
   inputHighPass = new Tone.Filter(60, "highpass");
   inputLowPass = new Tone.Filter(1200, "lowpass");
-  analyser = new Tone.Analyser("waveform", 2048);
+  analyser = new Tone.Analyser("waveform", 4096);
   mic.connect(inputHighPass);
   inputHighPass.connect(inputLowPass);
   inputLowPass.connect(analyser);
   responseTimer = setInterval(() => {
-    const pitch = detectPitch(analyser.getValue(), Tone.getContext().sampleRate);
+    const detection = detectPitch(analyser.getValue(), Tone.getContext().sampleRate);
     const now = performance.now();
-    if (pitch === null) {
+    if (!detection) {
       candidatePitch = null;
+      candidateFrameCount = 0;
       if (lastPitch !== null && now - noteStartedAt >= Number(duration.value)) {
         if (responseActive) {
           recordResponseNote(lastPitch);
@@ -390,13 +431,16 @@ async function startMonitoring() {
       }
       return;
     }
+    const { pitch } = detection;
 
     if (pitch !== candidatePitch) {
       candidatePitch = pitch;
       candidateStartedAt = now;
+      candidateFrameCount = 1;
       return;
     }
-    if (now - candidateStartedAt < Number(duration.value)) return;
+    candidateFrameCount += 1;
+    if (candidateFrameCount < 3 || now - candidateStartedAt < Number(duration.value)) return;
     if (pitch === lastPitch) {
       if (responseActive && responseNotes.length < call.length && responseNotes.length === call.length - 1 && now - noteStartedAt >= Number(duration.value)) {
         recordResponseNote(lastPitch);

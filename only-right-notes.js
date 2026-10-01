@@ -45,6 +45,7 @@ let wrong = 0;
 let lastPitch = null;
 let candidatePitch = null;
 let candidateStartedAt = 0;
+let candidateFrameCount = 0;
 let noteStartedAt = 0;
 let running = false;
 let progressionTimer;
@@ -155,7 +156,7 @@ async function startMonitoring() {
   await mic.open();
   inputHighPass = new Tone.Filter(60, "highpass");
   inputLowPass = new Tone.Filter(1200, "lowpass");
-  analyser = new Tone.Analyser("waveform", 2048);
+  analyser = new Tone.Analyser("waveform", 4096);
   mic.connect(inputHighPass);
   inputHighPass.connect(inputLowPass);
   inputLowPass.connect(analyser);
@@ -174,11 +175,27 @@ async function startMonitoring() {
     const peak = levelHistory.reduce((value, entry) => Math.max(value, entry.db), -Infinity);
     peakValue.textContent = Number.isFinite(peak) ? `${peak.toFixed(1)} dB` : "-∞ dB";
     levelMeter.style.transform = `scaleX(${Math.max(0, Math.min(1, (db + 60) / 60))})`;
-    if (!running || rms < thresholdAmplitude()) return;
-    const pitch = detectPitch(buffer, Tone.getContext().sampleRate);
-    if (pitch === null) return;
-    if (pitch !== candidatePitch) { candidatePitch = pitch; candidateStartedAt = now; return; }
-    if (now - candidateStartedAt < Number(duration.value) || pitch === lastPitch) return;
+    if (!running) return;
+    if (rms < thresholdAmplitude()) {
+      candidatePitch = null;
+      candidateFrameCount = 0;
+      return;
+    }
+    const detection = detectPitch(buffer, Tone.getContext().sampleRate);
+    if (!detection) {
+      candidatePitch = null;
+      candidateFrameCount = 0;
+      return;
+    }
+    const { pitch } = detection;
+    if (pitch !== candidatePitch) {
+      candidatePitch = pitch;
+      candidateStartedAt = now;
+      candidateFrameCount = 1;
+      return;
+    }
+    candidateFrameCount += 1;
+    if (candidateFrameCount < 3 || now - candidateStartedAt < Number(duration.value) || pitch === lastPitch) return;
     if (lastPitch !== null) scorePitch(lastPitch);
     lastPitch = pitch;
     noteStartedAt = now;
@@ -186,14 +203,60 @@ async function startMonitoring() {
   }, 50);
 }
 function detectPitch(buffer, sampleRate) {
-  let bestOffset = -1;
-  let bestCorrelation = 0;
-  for (let offset = Math.floor(sampleRate / 1000); offset < Math.floor(sampleRate / 70); offset += 1) {
-    let correlation = 0;
-    for (let index = 0; index < buffer.length - offset; index += 1) correlation += buffer[index] * buffer[index + offset];
-    if (correlation > bestCorrelation) { bestCorrelation = correlation; bestOffset = offset; }
+  const decimation = 2;
+  const samples = new Float32Array(Math.floor(buffer.length / decimation));
+  let mean = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const start = index * decimation;
+    samples[index] = (buffer[start] + buffer[start + 1]) / decimation;
+    mean += samples[index];
   }
-  return bestOffset > 0 && bestCorrelation > 0.01 ? Math.round(69 + 12 * Math.log2((Tone.getContext().sampleRate / bestOffset) / 440)) % 12 : null;
+  mean /= samples.length;
+  for (let index = 0; index < samples.length; index += 1) samples[index] -= mean;
+
+  const analysisRate = sampleRate / decimation;
+  const minLag = Math.max(2, Math.floor(analysisRate / 1000));
+  const maxLag = Math.min(Math.floor(analysisRate / 70), Math.floor(samples.length / 2));
+  const normalizedDifference = new Float32Array(maxLag + 1);
+  let cumulativeDifference = 0;
+
+  for (let lag = 1; lag <= maxLag; lag += 1) {
+    let sum = 0;
+    for (let index = 0; index < samples.length - lag; index += 1) {
+      const delta = samples[index] - samples[index + lag];
+      sum += delta * delta;
+    }
+    cumulativeDifference += sum;
+    normalizedDifference[lag] = cumulativeDifference > 0 ? (sum * lag) / cumulativeDifference : 1;
+  }
+
+  let bestLag = -1;
+  let bestDifference = Infinity;
+  for (let lag = minLag; lag <= maxLag; lag += 1) {
+    if (normalizedDifference[lag] <= 0.2) {
+      while (lag < maxLag && normalizedDifference[lag + 1] < normalizedDifference[lag]) lag += 1;
+      bestLag = lag;
+      bestDifference = normalizedDifference[lag];
+      break;
+    }
+    if (normalizedDifference[lag] < bestDifference) {
+      bestLag = lag;
+      bestDifference = normalizedDifference[lag];
+    }
+  }
+
+  const confidence = 1 - bestDifference;
+  if (bestLag < minLag || confidence < 0.8) return null;
+  const before = normalizedDifference[bestLag - 1] ?? normalizedDifference[bestLag];
+  const center = normalizedDifference[bestLag];
+  const after = normalizedDifference[bestLag + 1] ?? center;
+  const curvature = before - (2 * center) + after;
+  const adjustment = curvature ? 0.5 * (before - after) / curvature : 0;
+  const refinedLag = bestLag + Math.max(-0.5, Math.min(0.5, adjustment));
+  return {
+    pitch: Math.round(69 + 12 * Math.log2((analysisRate / refinedLag) / 440)) % 12,
+    confidence
+  };
 }
 function scorePitch(pitch) {
   const chord = progressionRows[activeIndex];
@@ -211,7 +274,7 @@ async function begin({ resetScore = true } = {}) {
     right = 0; wrong = 0;
     rightScore.textContent = "0"; wrongScore.textContent = "0"; updateAccuracy();
   }
-  lastPitch = null; candidatePitch = null;
+  lastPitch = null; candidatePitch = null; candidateFrameCount = 0;
   running = true; start.hidden = true; stop.hidden = false;
   scheduleTimeline(0, true);
   setStatus("Count in, then play notes from the highlighted chord.");
